@@ -1,5 +1,3 @@
-Ansible Playbook - Ansible playbook files (ansible.json)
-
 ---
 - hosts: all
 
