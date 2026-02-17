@@ -1,10 +1,16 @@
 ---
-# Ansible Playbook: Weekly Debian/Ubuntu/Proxmox Update
-# Works on any Debian-based system. Automatically detects Proxmox VE
+# Ansible Playbook: Weekly Debian/Ubuntu/Pop!_OS/Proxmox Update
+# Works on any apt-based system. Automatically detects Proxmox VE
 # and Proxmox Backup Server, then runs additional checks accordingly.
 # Sends Gotify notifications with reboot status per host.
+#
+# Supported: Debian, Ubuntu, Pop!_OS, Proxmox VE, Proxmox Backup Server
+#
+# Required extra-vars (set in Semaphore Environment):
+#   gotify_url    - Gotify server URL (e.g. http://gotify)
+#   gotify_token  - Gotify application token
 
-- name: Weekly update Debian-based systems
+- name: Weekly update apt-based systems
   hosts: all
   become: true
   gather_facts: true
@@ -18,8 +24,15 @@
 
   tasks:
     # ──────────────────────────────────────────────
-    # 1. Detect Proxmox Products
+    # 1. Validate and detect system type
     # ──────────────────────────────────────────────
+
+    - name: Verify this is an apt-based system
+      ansible.builtin.assert:
+        that:
+          - ansible_pkg_mgr == 'apt'
+        fail_msg: "This playbook only supports apt-based systems. Detected: {{ ansible_pkg_mgr }}"
+        success_msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} — apt confirmed"
 
     - name: Check if this is a Proxmox VE host
       ansible.builtin.stat:
@@ -31,10 +44,11 @@
         path: /usr/bin/proxmox-backup-manager
       register: pbs_check
 
-    - name: Set Proxmox facts
+    - name: Set system type facts
       ansible.builtin.set_fact:
         is_proxmox: "{{ pve_check.stat.exists | bool }}"
         is_pbs: "{{ pbs_check.stat.exists | bool }}"
+        is_pop_os: "{{ ansible_distribution == 'Pop!_OS' }}"
 
     # ──────────────────────────────────────────────
     # 2. System Update
@@ -78,7 +92,18 @@
       changed_when: autoclean_result.stdout is search('Del ')
 
     # ──────────────────────────────────────────────
-    # 4. Reboot Check
+    # 4. Pop!_OS specific (flatpak updates)
+    # ──────────────────────────────────────────────
+
+    - name: Update Flatpak packages
+      ansible.builtin.command: flatpak update -y --noninteractive
+      register: flatpak_result
+      changed_when: flatpak_result.stdout is search('updating')
+      failed_when: false
+      when: is_pop_os
+
+    # ──────────────────────────────────────────────
+    # 5. Reboot Check
     # ──────────────────────────────────────────────
 
     - name: Check if reboot is required
@@ -96,58 +121,58 @@
           {% endif %}
 
     # ──────────────────────────────────────────────
-    # 5. Proxmox VE Verification (only on PVE hosts)
+    # 6. Proxmox VE Verification
     # ──────────────────────────────────────────────
 
-    - name: Get current PVE version
-      ansible.builtin.command: pveversion
-      register: pve_version
-      changed_when: false
+    - name: Proxmox VE checks
       when: is_proxmox
+      block:
+        - name: Get current PVE version
+          ansible.builtin.command: pveversion
+          register: pve_version
+          changed_when: false
 
-    - name: Check Proxmox VE services status
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-      loop:
-        - pvedaemon
-        - pveproxy
-        - pvestatd
-        - pve-cluster
-      register: pve_services
-      when: is_proxmox
-
-    # ──────────────────────────────────────────────
-    # 6. Proxmox Backup Server Verification
-    # ──────────────────────────────────────────────
-
-    - name: Get current PBS version
-      ansible.builtin.command: proxmox-backup-manager versions
-      register: pbs_version
-      changed_when: false
-      when: is_pbs
-
-    - name: Check Proxmox Backup Server services status
-      ansible.builtin.systemd:
-        name: "{{ item }}"
-      loop:
-        - proxmox-backup
-        - proxmox-backup-proxy
-      register: pbs_services
-      when: is_pbs
-
-    - name: Check PBS datastore health
-      ansible.builtin.command: proxmox-backup-manager datastore list --output-format json
-      register: pbs_datastores
-      changed_when: false
-      when: is_pbs
-
-    - name: Display PBS datastore info
-      ansible.builtin.debug:
-        msg: "Datastores configured: {{ (pbs_datastores.stdout | from_json) | map(attribute='name') | list }}"
-      when: is_pbs
+        - name: Check Proxmox VE services status
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+          loop:
+            - pvedaemon
+            - pveproxy
+            - pvestatd
+            - pve-cluster
+          register: pve_services
 
     # ──────────────────────────────────────────────
-    # 7. Gotify Notifications (sent from remote host)
+    # 7. Proxmox Backup Server Verification
+    # ──────────────────────────────────────────────
+
+    - name: Proxmox Backup Server checks
+      when: is_pbs
+      block:
+        - name: Get current PBS version
+          ansible.builtin.command: proxmox-backup-manager versions
+          register: pbs_version
+          changed_when: false
+
+        - name: Check Proxmox Backup Server services status
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+          loop:
+            - proxmox-backup
+            - proxmox-backup-proxy
+          register: pbs_services
+
+        - name: Check PBS datastore health
+          ansible.builtin.command: proxmox-backup-manager datastore list --output-format json
+          register: pbs_datastores
+          changed_when: false
+
+        - name: Display PBS datastore info
+          ansible.builtin.debug:
+            msg: "Datastores configured: {{ (pbs_datastores.stdout | from_json) | map(attribute='name') | list }}"
+
+    # ──────────────────────────────────────────────
+    # 8. Gotify Notifications (sent from Semaphore runner)
     # ──────────────────────────────────────────────
 
     - name: Build Gotify notification metadata
@@ -158,6 +183,20 @@
              else '✅ ' + ansible_hostname + ' (' + ansible_default_ipv4.address + ') — Update completed' }}
         _gotify_priority: "{{ 8 if reboot_required.stat.exists else gotify_priority }}"
 
+    - name: Build Gotify message body
+      ansible.builtin.set_fact:
+        _gotify_message: >-
+          🖥️ **Host:** {{ ansible_hostname }}\n\n🌐
+          **IP:** {{ ansible_default_ipv4.address }}\n\n🏷️
+          **FQDN:** {{ ansible_fqdn }}\n\n💻
+          **OS:** {{ ansible_distribution }} {{ ansible_distribution_version }}\n\n{{
+          '🟢 **PVE:** ' + pve_version.stdout + '\n\n' if is_proxmox | bool else '' }}{{
+          '🟢 **PBS:** ' + pbs_version.stdout_lines[0] + '\n\n' if is_pbs | bool else '' }}📦
+          **Packages upgraded:** {{ 'Yes' if upgrade_result.changed else 'No' }}{{
+          '\n\n📦 **Flatpak updated:** ' + ('Yes' if flatpak_result.changed else 'No') if is_pop_os | bool else '' }}\n\n---\n\n{{
+          '⚠️ **Reboot is required — please reboot manually!**' if reboot_required.stat.exists
+          else '✅ **No reboot required**' }}
+
     - name: Send Gotify notification
       ansible.builtin.shell: |
         cat <<'PAYLOAD' | curl -s -o /dev/null -w "%{http_code}" \
@@ -167,23 +206,26 @@
           -d @-
         {
           "title": "{{ _gotify_title | trim }}",
-          "message": "🖥️ **Host:** {{ ansible_hostname }}\n\n🌐 **IP:** {{ ansible_default_ipv4.address }}\n\n🏷️ **FQDN:** {{ ansible_fqdn }}\n\n💻 **OS:** {{ ansible_distribution }} {{ ansible_distribution_version }}\n\n{{ '🟢 **PVE:** ' + pve_version.stdout + '\n\n' if is_proxmox | bool else '' }}{{ '🟢 **PBS:** ' + pbs_version.stdout_lines[0] + '\n\n' if is_pbs | bool else '' }}📦 **Packages upgraded:** {{ 'Yes' if upgrade_result.changed else 'No' }}\n\n---\n\n{{ '⚠️ **Reboot is required — please reboot manually!**' if reboot_required.stat.exists else '✅ **No reboot required**' }}",
+          "message": "{{ _gotify_message | trim }}",
           "priority": {{ _gotify_priority }},
           "extras": {"client::display": {"contentType": "text/markdown"}}
         }
         PAYLOAD
+      delegate_to: 127.0.0.1
+      connection: local
+      become: false
       register: gotify_response
       changed_when: false
       failed_when: gotify_response.stdout != "200"
 
     # ──────────────────────────────────────────────
-    # 8. Final Status
+    # 9. Final Status
     # ──────────────────────────────────────────────
 
     - name: Display final status (Proxmox VE)
       ansible.builtin.debug:
         msg:
-          - "Host: {{ inventory_hostname }}"
+          - "Host: {{ ansible_hostname }} ({{ inventory_hostname }})"
           - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
           - "PVE Version: {{ pve_version.stdout }}"
           - "Packages upgraded: {{ 'Yes' if upgrade_result.changed else 'No' }}"
@@ -194,7 +236,7 @@
     - name: Display final status (Proxmox Backup Server)
       ansible.builtin.debug:
         msg:
-          - "Host: {{ inventory_hostname }}"
+          - "Host: {{ ansible_hostname }} ({{ inventory_hostname }})"
           - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
           - "PBS Version: {{ pbs_version.stdout_lines[0] }}"
           - "Packages upgraded: {{ 'Yes' if upgrade_result.changed else 'No' }}"
@@ -203,11 +245,12 @@
           - "Datastores: {{ (pbs_datastores.stdout | from_json) | map(attribute='name') | list | join(', ') }}"
       when: is_pbs
 
-    - name: Display final status (Debian/Ubuntu)
+    - name: Display final status (Debian/Ubuntu/Pop!_OS)
       ansible.builtin.debug:
         msg:
-          - "Host: {{ inventory_hostname }}"
+          - "Host: {{ ansible_hostname }} ({{ inventory_hostname }})"
           - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
           - "Packages upgraded: {{ 'Yes' if upgrade_result.changed else 'No' }}"
+          - "{{ 'Flatpak updated: ' + ('Yes' if flatpak_result.changed else 'No') if is_pop_os | bool else '' }}"
           - "Reboot required: {{ 'Yes' if reboot_required.stat.exists else 'No' }}"
       when: not is_proxmox and not is_pbs
