@@ -1,0 +1,174 @@
+---
+- name: Update Home Assistant
+  hosts: homeassistant
+  gather_facts: false
+
+  tasks:
+    - name: Check HA API is reachable
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+        status_code: 200
+      register: ha_api_check
+
+    - name: Get current Core update status
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/states/update.home_assistant_core_update"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+        return_content: true
+      register: core_update
+
+    - name: Display Core version info
+      ansible.builtin.debug:
+        msg: >
+          Current: {{ core_update.json.attributes.installed_version }}
+          | Latest: {{ core_update.json.attributes.latest_available_version }}
+          | Update available: {{ core_update.json.state }}
+
+    - name: Get current Supervisor update status
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/states/update.home_assistant_supervisor_update"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+        return_content: true
+      register: supervisor_update
+
+    - name: Display Supervisor version info
+      ansible.builtin.debug:
+        msg: >
+          Current: {{ supervisor_update.json.attributes.installed_version }}
+          | Latest: {{ supervisor_update.json.attributes.latest_available_version }}
+          | Update available: {{ supervisor_update.json.state }}
+
+    - name: Get current OS update status
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/states/update.home_assistant_operating_system_update"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+        return_content: true
+      register: os_update
+
+    - name: Display OS version info
+      ansible.builtin.debug:
+        msg: >
+          Current: {{ os_update.json.attributes.installed_version }}
+          | Latest: {{ os_update.json.attributes.latest_available_version }}
+          | Update available: {{ os_update.json.state }}
+
+    - name: Create backup before updating
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/services/backup/create"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          title: "ansible-pre-update-{{ lookup('pipe', 'date +%Y%m%d-%H%M%S') }}"
+        status_code: [200, 201]
+      when: core_update.json.state == "on" or supervisor_update.json.state == "on" or os_update.json.state == "on"
+
+    - name: Wait for backup to complete
+      ansible.builtin.pause:
+        seconds: 120
+      when: core_update.json.state == "on" or supervisor_update.json.state == "on" or os_update.json.state == "on"
+
+    # Update Core
+    - name: Update Home Assistant Core
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/services/update/install"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          entity_id: "update.home_assistant_core_update"
+        status_code: [200, 201]
+        timeout: 300
+      when: core_update.json.state == "on"
+      register: core_update_result
+
+    - name: Wait for HA to come back after Core update
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+        status_code: 200
+      register: ha_health
+      until: ha_health.status == 200
+      retries: 60
+      delay: 10
+      when: core_update.json.state == "on"
+
+    # Update Supervisor
+    - name: Update Home Assistant Supervisor
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/services/update/install"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          entity_id: "update.home_assistant_supervisor_update"
+        status_code: [200, 201]
+        timeout: 300
+      when: supervisor_update.json.state == "on"
+
+    - name: Wait for HA to come back after Supervisor update
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+        status_code: 200
+      register: ha_health_sup
+      until: ha_health_sup.status == 200
+      retries: 60
+      delay: 10
+      when: supervisor_update.json.state == "on"
+
+    # Update OS
+    - name: Update Home Assistant OS
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/services/update/install"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          entity_id: "update.home_assistant_operating_system_update"
+        status_code: [200, 201]
+        timeout: 300
+      when: os_update.json.state == "on"
+
+    - name: Wait for HA to come back after OS update
+      ansible.builtin.uri:
+        url: "{{ ha_url }}/api/"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ vault_ha_token }}"
+        status_code: 200
+      register: ha_health_os
+      until: ha_health_os.status == 200
+      retries: 90
+      delay: 10
+      when: os_update.json.state == "on"
+
+    # Final summary
+    - name: Update summary
+      ansible.builtin.debug:
+        msg: |
+          === Update Summary ===
+          Core: {{ 'Updated' if core_update.json.state == 'on' else 'Already up to date' }}
+          Supervisor: {{ 'Updated' if supervisor_update.json.state == 'on' else 'Already up to date' }}
+          OS: {{ 'Updated' if os_update.json.state == 'on' else 'Already up to date' }}
