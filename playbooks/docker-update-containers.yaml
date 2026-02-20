@@ -50,48 +50,8 @@
     # ──────────────────────────────────────────────
 
     - name: Create docker update helper script
-      ansible.builtin.copy:
-        dest: /tmp/docker-update-helper.sh
-        mode: '0755'
-        content: |
-          #!/bin/bash
-          # Usage: docker-update-helper.sh <action> <container_name>
-          ACTION="$1"
-          CONTAINER="$2"
-
-          case "$ACTION" in
-            get-image)
-              # Returns: container_name|image|image_digest
-              docker inspect --format '{{.Name}}|{{.Config.Image}}|{{.Image}}' "$CONTAINER" | sed 's|^/||'
-              ;;
-            get-image-id)
-              # Returns image ID for a given image name
-              IMAGE="$2"
-              docker inspect --format '{{.Id}}' "$IMAGE" 2>/dev/null
-              ;;
-            get-run-config)
-              # Reconstructs docker run command from container inspection
-              docker inspect --format '
-              --name {{.Name}}
-              {{range .HostConfig.Binds}}-v {{.}} {{end}}
-              {{range $k, $v := .HostConfig.PortBindings}}{{range $v}}-p {{if .HostIP}}{{.HostIP}}:{{end}}{{.HostPort}}:{{$k}} {{end}}{{end}}
-              {{range .Config.Env}}-e "{{.}}" {{end}}
-              {{if .HostConfig.RestartPolicy.Name}}--restart {{.HostConfig.RestartPolicy.Name}}{{end}}
-              {{if .HostConfig.NetworkMode}}--network {{.HostConfig.NetworkMode}}{{end}}
-              {{if .Config.Hostname}}--hostname {{.Config.Hostname}}{{end}}
-              {{if .HostConfig.Privileged}}--privileged{{end}}
-              {{range .HostConfig.Devices}}--device {{.PathOnHost}}:{{.PathInContainer}} {{end}}
-              {{range .HostConfig.CapAdd}}--cap-add {{.}} {{end}}
-              {{if .HostConfig.PidMode}}--pid {{.HostConfig.PidMode}}{{end}}
-              {{range $k, $v := .Config.Labels}}-l "{{$k}}={{$v}}" {{end}}
-              -d {{.Config.Image}}
-              {{if .Config.Cmd}}{{range .Config.Cmd}}{{.}} {{end}}{{end}}
-              ' "$CONTAINER" | sed 's|--name /|--name |' | tr -s ' \n' ' ' | sed 's/^ *//;s/ *$//'
-              ;;
-            check-status)
-              docker ps --filter "name=^${CONTAINER}$" --format '{{.Status}}'
-              ;;
-          esac
+      ansible.builtin.shell: echo 'IyEvYmluL2Jhc2gKQUNUSU9OPSIkMSIKQ09OVEFJTkVSPSIkMiIKCmNhc2UgIiRBQ1RJT04iIGluCiAgZ2V0LWltYWdlKQogICAgZG9ja2VyIGluc3BlY3QgLS1mb3JtYXQgJ3t7Lk5hbWV9fXx7ey5Db25maWcuSW1hZ2V9fXx7ey5JbWFnZX19JyAiJENPTlRBSU5FUiIgfCBzZWQgJ3N8Xi98fCcKICAgIDs7CiAgZ2V0LWltYWdlLWlkKQogICAgZG9ja2VyIGluc3BlY3QgLS1mb3JtYXQgJ3t7LklkfX0nICIkQ09OVEFJTkVSIiAyPi9kZXYvbnVsbAogICAgOzsKICBnZXQtcnVuLWNvbmZpZykKICAgIGRvY2tlciBpbnNwZWN0IC0tZm9ybWF0ICcKICAgIC0tbmFtZSB7ey5OYW1lfX0KICAgIHt7cmFuZ2UgLkhvc3RDb25maWcuQmluZHN9fS12IHt7Ln19IHt7ZW5kfX0KICAgIHt7cmFuZ2UgJGssICR2IDo9IC5Ib3N0Q29uZmlnLlBvcnRCaW5kaW5nc319e3tyYW5nZSAkdn19LXAge3tpZiAuSG9zdElQfX17ey5Ib3N0SVB9fTp7e2VuZH19e3suSG9zdFBvcnR9fTp7eyRrfX0ge3tlbmR9fXt7ZW5kfX0KICAgIHt7cmFuZ2UgLkNvbmZpZy5FbnZ9fS1lICJ7ey59fSIge3tlbmR9fQogICAge3tpZiAuSG9zdENvbmZpZy5SZXN0YXJ0UG9saWN5Lk5hbWV9fS0tcmVzdGFydCB7ey5Ib3N0Q29uZmlnLlJlc3RhcnRQb2xpY3kuTmFtZX19e3tlbmR9fQogICAge3tpZiAuSG9zdENvbmZpZy5OZXR3b3JrTW9kZX19LS1uZXR3b3JrIHt7Lkhvc3RDb25maWcuTmV0d29ya01vZGV9fXt7ZW5kfX0KICAgIHt7aWYgLkNvbmZpZy5Ib3N0bmFtZX19LS1ob3N0bmFtZSB7ey5Db25maWcuSG9zdG5hbWV9fXt7ZW5kfX0KICAgIHt7aWYgLkhvc3RDb25maWcuUHJpdmlsZWdlZH19LS1wcml2aWxlZ2Vke3tlbmR9fQogICAge3tyYW5nZSAuSG9zdENvbmZpZy5EZXZpY2VzfX0tLWRldmljZSB7ey5QYXRoT25Ib3N0fX06e3suUGF0aEluQ29udGFpbmVyfX0ge3tlbmR9fQogICAge3tyYW5nZSAuSG9zdENvbmZpZy5DYXBBZGR9fS0tY2FwLWFkZCB7ey59fSB7e2VuZH19CiAgICB7e2lmIC5Ib3N0Q29uZmlnLlBpZE1vZGV9fS0tcGlkIHt7Lkhvc3RDb25maWcuUGlkTW9kZX19e3tlbmR9fQogICAge3tyYW5nZSAkaywgJHYgOj0gLkNvbmZpZy5MYWJlbHN9fS1sICJ7eyRrfX09e3skdn19IiB7e2VuZH19CiAgICAtZCB7ey5Db25maWcuSW1hZ2V9fQogICAge3tpZiAuQ29uZmlnLkNtZH19e3tyYW5nZSAuQ29uZmlnLkNtZH19e3sufX0ge3tlbmR9fXt7ZW5kfX0KICAgICcgIiRDT05UQUlORVIiIHwgc2VkICdzfC0tbmFtZSAvfC0tbmFtZSB8JyB8IHRyIC1zICcgXG4nICcgJyB8IHNlZCAncy9eICovLztzLyAqJC8vJwogICAgOzsKICBjaGVjay1zdGF0dXMpCiAgICBkb2NrZXIgcHMgLS1maWx0ZXIgIm5hbWU9XiR7Q09OVEFJTkVSfSQiIC0tZm9ybWF0ICd7ey5TdGF0dXN9fScKICAgIDs7CmVzYWMK' | base64 -d > /tmp/docker-update-helper.sh && chmod +x /tmp/docker-update-helper.sh
+      changed_when: false
 
     # ──────────────────────────────────────────────
     # 3. Get current image digests for comparison
