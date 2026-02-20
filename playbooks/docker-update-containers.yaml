@@ -21,7 +21,6 @@
     prune_old_images: true
     # Containers to skip (never update these)
     exclude_containers:
-      - watchtower
       - ansible-semaphoreui-1
       - ansible-semaphoreui_db-1
 
